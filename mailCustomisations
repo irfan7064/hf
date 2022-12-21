@@ -1,0 +1,618 @@
+public class CRM_EmailSMSSend {
+    
+    @InvocableMethod  
+    public static void getTaskId(List<String> lst){
+        if(lst[0].startsWith('500')){
+            list<Task> listTasks = [select id from Task where WhatId IN:lst and Type_of_Document__c='SOA'];
+            
+            for(Task task: listTasks){
+                CRM_EmailSMSSend.sendEmailSMS(task.Id);
+            }
+            
+        }
+        else{
+            for(String taskId:  lst){
+                if(taskId!=null){
+                    CRM_EmailSMSSend.sendEmailSMS(taskId);
+                }
+                
+            }
+        }
+    }
+    
+   
+    public static void sendEmailSMS(String taskid){
+        String email;
+        String tinyURL;
+        Task tskRecord=  [select id,Subject,Tiny_URL__c,DocumentURL__c,Activity_Type__c,Type_of_Document__c,ModeofDelivery__c,RefCustomerDocument__r.Id,whatid from Task where id=:taskid];
+       
+        //Case caseRecord= [select id,Query_Description__r.Name,ContactEmail,Contact.Name,Contact.Id,Loan_No__r.name,Loan_No__r.Id,Mode_Of_delivery__c from Case where Id=:tskRecord.whatid];
+        Case caseRecord=[select Id,CRM_Customer_Feedback_URL__c,CRM_AppId__c,Loan_No__r.LMSLanNo__c,Loan_No__r.LMSApplicationID__c,ContactPhone,Loan_No__r.LAN__c,
+                         Call_back_no__c,CaseNumber,Document_Generation_Email__c,ModeofDelivery__c,Query_Description__r.Name,Contactid ,Loan_No__c,AccountId,Loan_No__r.Name,ContactEmail,ContactMobile
+                         from case where id=:tskRecord.whatid];
+       
+        //OrgWideEmailAddress[] owea = [select Id,Address from OrgWideEmailAddress where Address = 'customer.care@herofincorp.com'];
+        CRM_GenericConfiguration__c config = CRM_GenericConfiguration__c.getInstance('Customer_Care');
+        OrgWideEmailAddress[] owea = [select Id,Address from OrgWideEmailAddress where DisplayName =:config.Value__c];
+        
+        // blob b;
+        Task tskRecordRec=  [select id,Tiny_URL__c,DocumentURL__c,Activity_Type__c,Type_of_Document__c,ModeofDelivery__c,RefCustomerDocument__r.Id,whatid from Task where whatid=:caseRecord.Id and (subject='Generate a Document (System Task)' OR subject ='Generate Closure Letter(System Task)' )];
+       
+        ContentDocumentLink contentDocLink =[select id,ContentDocumentId from ContentDocumentLink where LinkedEntityId=:tskRecordRec.Id limit 1];//.RefCustomerDocument__r.Id limit 1];
+        ContentVersion contentVersion = [Select Id,VersionData from ContentVersion Where ContentDocumentId=:contentDocLink.ContentDocumentId];       
+        
+        if(tskRecord.ModeofDelivery__c.contains('SMS')){
+            //   ContentDistribution contentDist=new ContentDistribution();
+            //  contentDist.ContentVersionId=contentVersion.Id;
+            ///  contentDist.Name='Content Delivery';
+            //  insert contentDist;
+            // ContentDistribution contentDistURL= [select ContentDownloadUrl from ContentDistribution where id =: contentDist.Id];
+            // 
+            ContentDistribution contentDistURL= [select ContentDownloadUrl from ContentDistribution where ContentVersionId =: contentVersion.Id];
+            //String tinyURL='https://hfcdev1--crmdev1--c.cs57.content.force.com/sfc/dist/version/download/?oid=00D0k0000008jKm&ids=0680k000000dE9V&d=%2Fa%2F0k000000Cdrr%2Fhz_nl0yujUVvjnOwY.rM9njAJm6EwgKr_PVB1SO3NGA&asPdf=false';
+            // CRM_APIProcessor.getTinyURL(contentDistURL.ContentDownloadUrl);
+            //String tinyURLCall= CRM_APIProcessor.getTinyURL(tinyURL);
+           
+            CommunicationTriggerPoint__mdt triggerpoint= CRM_GenericCommunicationModuleHelper.getTriggerPoint('Document_Generation');
+            Map<String,String> bodyParam = new Map<String,String>();
+             //bodyParam.put('{smsHyperLink}',tskRecordRec.Tiny_URL__c);
+            if(tskRecord.Subject=='Document Delivery by - SMS' && (tskRecord.Activity_Type__c=='Closure Letter Required' || tskRecord.Type_of_Document__c== 'Closure')){
+             
+                if(tskRecord.Tiny_URL__c!=null){
+                    bodyParam.put('{smsHyperLink}',tskRecord.Tiny_URL__c); 
+                }
+                
+            }else{
+                bodyParam.put('{smsHyperLink}',tskRecordRec.Tiny_URL__c);//contentDistURL.ContentDownloadUrl); //Similar Add Required parameters located in triggerpoint.TemplateParameters__c
+            }
+            
+            bodyParam.put('{letterName}',caseRecord.Query_Description__r.Name);
+            bodyParam.put('{LoanAppId}',caseRecord.Loan_No__r.LMSLanNo__c);
+            String phone;
+            if(caseRecord.Call_back_no__c!=null){
+                phone =caseRecord.Call_back_no__c;}//'fnajkfnajkfnajkfnajklnf';//}
+            else{
+                phone=caseRecord.ContactMobile;
+                
+            }
+            
+            //For SMS
+            if(triggerpoint.SendSMS__c){
+                //SMS will Send To Customer
+                bodyParam.put('{SMSTemplateName}',triggerpoint.SMSTemplateName__c);
+                CRM_GenericConfiguration__c objGenericConfig = CRM_GenericConfiguration__c.getValues('sendSMSInternally');
+                if (objGenericConfig != null && objGenericConfig.Value__c != null && objGenericConfig.Value__c != '') 
+                    bodyParam.put('contactNo',objGenericConfig.Value__c);
+                else
+                    // bodyParam.put('contactNo',caseRecord.Contact.MobilePhone); // Add only Customer Contact No
+                bodyParam.put('contactNo',phone);
+                bodyParam.put('loanId',caseRecord.Loan_No__c);
+                bodyParam.put('accountId',caseRecord.AccountId);
+                bodyParam.put('caseId',caseRecord.Id);
+                
+            }
+            CRM_GenericCommunicationModule.sendCommunication(bodyParam);
+            // tskRecord.Customer_Document__c=false;
+            tskRecord.Status= 'Completed';
+            
+        }else if(tskRecord.ModeofDelivery__c.contains('Email')){
+            EmailTemplate emailTemplate;
+            String nameofDocument;
+            if(caseRecord.Query_Description__r.Name=='Foreclosure Statement Required'|| tskRecord.Activity_Type__c=='Foreclosure Statement Required'){
+                nameofDocument='Foreclosure Statement.pdf';
+            }else if(caseRecord.Query_Description__r.Name=='Repayment Schedule Required' || tskRecord.Activity_Type__c=='Repayment Schedule Required'){
+                nameofDocument='Repayment Schedule.pdf';
+            }else if(caseRecord.Query_Description__r.Name=='Welcome letter Required' || tskRecord.Activity_Type__c=='Welcome letter Required'){  
+                nameofDocument='Welcome letter.pdf';
+            }else if(caseRecord.Query_Description__r.Name=='Statement of Account Required' || tskRecord.Activity_Type__c=='Statement of Account Required'){
+                nameofDocument='Statement of Account.pdf';
+            }else if(caseRecord.Query_Description__r.Name=='Closure Letter Required' || tskRecord.Activity_Type__c=='Closure Letter Required'){
+                nameofDocument='Closure Letter.pdf';
+            }
+            
+            else if(CRM_Constants.EMI_UPDATE_QUERY_DESCRIPTION.contains(caseRecord.Query_Description__r.Name)){
+                nameofDocument='Statement of Account.pdf';
+            }
+            
+            
+            /*    if(caseRecord.Query_Description__r.Name=='Foreclosure Statement Required' || caseRecord.Query_Description__r.Name=='Welcome letter Required' || tskRecord.Activity_Type__c=='Foreclosure Statement Required' || tskRecord.Activity_Type__c=='Welcome letter Required'){  
+emailTemplate= [SELECT HtmlValue,Id,Subject FROM EmailTemplate WHERE Name = 'CRM_ForeClosure'];
+}else if(caseRecord.Query_Description__r.Name=='Statement of Account Required' || caseRecord.Query_Description__r.Name=='Repayment Schedule Required' || tskRecord.Activity_Type__c=='Repayment Schedule Required' || tskRecord.Activity_Type__c=='Statement of Account Required'){
+emailTemplate= [SELECT HtmlValue,Id,Subject FROM EmailTemplate WHERE Name = 'CRM_RepaymentSOA'];
+}*/
+            if(caseRecord.Query_Description__r.Name=='Foreclosure Statement Required' || tskRecord.Activity_Type__c=='Foreclosure Statement Required'){  
+                emailTemplate= [SELECT HtmlValue,Id,Subject FROM EmailTemplate WHERE Name = 'CRM_ForeClosure'];
+            }else if(caseRecord.Query_Description__r.Name=='Repayment Schedule Required' || tskRecord.Activity_Type__c=='Repayment Schedule Required'){
+                emailTemplate= [SELECT HtmlValue,Id,Subject FROM EmailTemplate WHERE Name = 'CRM_RepaymentSchedule'];
+            }else if(caseRecord.Query_Description__r.Name=='Welcome letter Required' || tskRecord.Activity_Type__c=='Welcome letter Required'){  
+                emailTemplate= [SELECT HtmlValue,Id,Subject FROM EmailTemplate WHERE Name = 'CRM_WelcomeLetter'];
+            }else if(caseRecord.Query_Description__r.Name=='Statement of Account Required' || tskRecord.Activity_Type__c=='Statement of Account Required'){  
+                emailTemplate= [SELECT HtmlValue,Id,Subject FROM EmailTemplate WHERE Name = 'CRM_SOA'];
+            }
+            else if(caseRecord.Query_Description__r.Name=='EMI Deposition (Cheque)'){
+                emailTemplate = [SELECT HtmlValue,Id,Subject FROM EmailTemplate WHERE Name = 'CRM_EMI Dep(Cheque) Auto Closure'];
+            }
+            else if(caseRecord.Query_Description__r.Name=='EMI Deposition (Cash/Online)'){
+                emailTemplate = [SELECT HtmlValue,Id,Subject FROM EmailTemplate WHERE Name = 'CRM_EMI Dep(Cash/Online) Auto Closure'];
+            }else if(caseRecord.Query_Description__r.Name=='Closure Letter Required'){
+                emailTemplate = [SELECT HtmlValue,Id,Subject FROM EmailTemplate WHERE Name = 'CRM_ClosureLetter'];
+            }
+            
+            String emailsubject=emailTemplate.Subject;
+            String emailbody=emailTemplate.HtmlValue;
+            emailsubject=emailsubject.replace('LANNO#',caseRecord.Loan_No__r.LMSLanNo__c);
+            emailbody=emailbody.replace('XXXX',caseRecord.Loan_No__r.LMSApplicationID__c);
+            
+            emailbody=emailbody.replace('YYYY',caseRecord.Loan_No__r.LMSLanNo__c);
+            emailbody=emailbody.replace('{!Case.CRM_AppId__c}',caseRecord.CRM_AppId__c);
+            emailbody=emailbody.replace('{!Case.Id}',caseRecord.Id);
+            emailbody=emailbody.replace('{!Case.CRM_Customer_Feedback_URL__c}',caseRecord.CRM_Customer_Feedback_URL__c);
+            
+            emailsubject=emailsubject.replace('CaseNo',caseRecord.CaseNumber);
+            emailsubject=emailsubject.replace('{!Case.CaseNumber}',caseRecord.CaseNumber);
+            Messaging.EmailFileAttachment attach = new Messaging.EmailFileAttachment();
+            attach.setContentType('application/pdf');
+            attach.setFileName(nameofDocument);
+            attach.setInline(false);
+            // attach.Body = b;
+            attach.Body =contentVersion.VersionData;
+            String emailErrorReport;
+            List<Messaging.SingleEmailMessage> mails = 
+                new List<Messaging.SingleEmailMessage>();
+            if(caseRecord.Document_Generation_Email__c!=null){
+                email =caseRecord.Document_Generation_Email__c;}//'fnajkfnajkfnajkfnajklnf';//}
+            else{
+                email=caseRecord.ContactEmail;
+            }
+            Messaging.SingleEmailMessage mail = new Messaging.SingleEmailMessage();
+            if ( owea.size() > 0 ) {
+                mail.setOrgWideEmailAddressId(owea.get(0).Id);
+            }
+            mail.setUseSignature(false);
+            mail.setToAddresses(new String[] { email });
+            mail.setSubject(emailsubject);
+            //mail.setHtmlBody('Here is the ForeClosure statement you requested! Check the attachment!');
+            mail.setHtmlBody(emailbody);
+            
+            mail.setFileAttachments(new Messaging.EmailFileAttachment[] { attach });
+            mails.add(mail);
+            
+            // Send the email
+            //Messaging.SingleEmailMessage results;
+            try{
+                Messaging.SendEmailResult[] results=  Messaging.sendEmail(mails);
+                
+                
+                //This is for the Email attachment in the cases
+                EmailMessage emailMsg = new EmailMessage(); // Created a EmailMessage and copy all details from above.
+                emailMsg.ToAddress=(mails[0].getToAddresses())[0];
+                emailMsg.FromAddress = owea.size()>0 ? owea.get(0).Address:'';
+                emailMsg.Subject=mails[0].getSubject();
+                emailMsg.HtmlBody=mails[0].getHtmlBody();
+                emailMsg.ParentId = caseRecord.Id; //Attach with the case
+                emailMsg.MessageDate = system.now();
+                emailMsg.CRM_AutoGenerateEmail__c='Yes';
+                
+                //  emailMsg.Status = '1';
+                // emailMsg.ContentDocumentIds=contentDocLink.ContentDocumentId;
+                
+                insert emailMsg;
+                ContentVersion contentVersionRecord = new  ContentVersion();
+                contentVersionRecord.VersionData= contentVersion.VersionData;
+                
+                contentVersionRecord.Title=nameofDocument;
+                contentVersionRecord.PathOnClient='Document generation.pdf';
+                insert contentVersionRecord;
+                ContentDocumentLink link = new ContentDocumentLink();
+                link.LinkedEntityId = emailMsg.Id;//custDocs.Id;  //eventId is coming in with valid content!!
+                link.ContentDocumentId = [SELECT Id, ContentDocumentId FROM ContentVersion WHERE Id =: contentVersionRecord.Id].ContentDocumentId;
+                link.ShareType = 'V';
+                link.Visibility = 'AllUsers';
+                insert link;                
+                
+                //This is for the Email attachment in the cases
+                
+                //   tskRecord.Customer_Document__c=false;
+                tskRecord.Status= 'Completed';
+                tskRecord.Description='';
+            }catch(System.EmailException ex){
+                system.debug('exdsadasd'+ex);
+                //Exceptions are passed to here.
+                //    tskRecord.Customer_Document__c=false;
+                tskRecord.Status= 'System Failure';
+                tskRecord.Description=ex.getMessage();
+                
+            }
+            
+        }
+        if(!CRM_Constants.EMI_UPDATE_QUERY_DESCRIPTION.contains(caseRecord.Query_Description__r.Name)){
+          update tskRecord;
+        }
+        
+    }
+}
+//================================================
+
+public class CRM_GenericCommunicationModuleHelper {
+ public static Map<String, String> initializeMap(){
+        
+      Map<String, String> existingValueMap = new Map<String,String>();
+          existingValueMap.put('enterpriseid','hfinotp');
+          existingValueMap.put('subEnterpriseid','hfinotp');
+          existingValueMap.put('pusheid','hfinotp');
+          existingValueMap.put('pushepwd','hfinotp8');
+        existingValueMap.put('sender','HeroFI');
+    
+    return existingValueMap;
+  }
+
+  //Fetch CommunicationTriggerPoint__mdt metadata
+  public static CommunicationTriggerPoint__mdt getTriggerPoint(String triggerPointname){
+    try{
+      if(triggerPointname!=null){
+        List<CommunicationTriggerPoint__mdt> triggerPoint = [select Id,SendEmail__c,SendSMS__c,EmailTemplateName__c,SMSTemplateName__c,TemplateParameters__c,ToChannelDealer__c,ToCustomer__c,ToSEDSA__c,ToTE__c,MasterLabel,DeveloperName from CommunicationTriggerPoint__mdt where DeveloperName =:triggerPointname limit 1];
+        if(triggerPoint.size() > 0){
+          //System.debug(triggerPoint);
+          return triggerPoint[0];
+        }        
+      } 
+    }catch(Exception e){
+      //System.debug('Error'+e);
+      System.debug('Exception'+e.getStackTraceString());
+    }
+    return null;  
+  }
+  
+  //Fetch Email Template
+  public static String getEmailTemplate(String TemplateName){
+        String smsBody ;
+        EmailTemplate smsTemplate;
+        try {
+            smsTemplate = [SELECT Id
+                           , Body
+                           FROM EmailTemplate 
+                           WHERE Name = :TemplateName
+                          ];
+            
+            if(smsTemplate != null){
+                smsBody = smsTemplate.Body;
+                return smsBody;
+            }
+            
+        } catch (Exception ex) {
+            //System.debug('exception in fetching template => '+ex.getMessage());
+            //add error and return from here
+           System.debug('Exception'+ex.getStackTraceString());
+        }
+        return null;
+    }
+    
+    public static String getFinalEmailBody(Map<String,String> bodyParameters , String body){
+      try{
+        for(String key : bodyParameters.keySet()){
+          String value = bodyParameters.get(key);
+        if(value!=null){
+           body = body.replace(key,value);
+        }
+        }
+      }catch(Exception e){
+        //System.debug('Error'+e);
+        System.debug('Exception'+e.getStackTraceString());
+      }
+      return body;
+    }     
+}
+//==================
+public class CRM_GenericCommunicationModule {
+/*****************************************************
+* Method Name :sendCommunication
+* Description: Method to Send SMS & Email As per body Parameters     
+*/
+    public static void sendCommunication(Map<String,String> bodyParam){
+        
+        system.debug('in sendCommunication');
+        String templateName;
+        String body;
+        try{
+            if(!bodyParam.isEmpty()){
+                
+                if(bodyParam.containsKey('{SMSTemplateName}') && bodyParam.containsKey('contactNo')){
+                    templateName =bodyParam.get('{SMSTemplateName}');
+                    body = CRM_GenericCommunicationModuleHelper.getEmailTemplate(templateName);
+                    body=CRM_GenericCommunicationModuleHelper.getFinalEmailBody(bodyParam,body);
+                    sendUserSMS(bodyParam.get('loanId'),bodyParam.get('contactNo'),bodyParam.get('accountId'),body,bodyParam.get('caseId'));
+                    
+                    /*List<String> contactNo = bodyParam.get('{contactNo}').split(';');
+				for(String mobileNo :contactNo){
+				//System.debug('Sending SMS to '+mobileNo);
+				sendUserSMS(mobileNo, body);
+					}*/
+                    
+                }   
+            }       
+        }catch(Exception e){
+            System.debug('Error'+e);
+            //Logger.log('GenericCommunicationModule', 'GenericCommunicationModule.sendEmail', '', '',e.getMessage() );
+        }
+        
+    }
+    
+    /*****************************************************
+* Method Name :sendUserSMS
+* Description:Method to send User SMS     
+*/
+    public static void sendUserSMS(String loanId , String contactNo,String accountId,String smsBody, String caseId){
+        system.debug('in sendUserSMS---');
+        system.debug('in sendUserSMS--> loadID : '+loanId+'--contactNo : '+contactNo+'--smsBody : '+smsBody);
+        List<Case> clist=[Select id,origin from Case where id = :caseId];
+        try{
+            if(contactNo!=null && smsBody!=null & loanId!=null){
+                system.debug('in sendUserSMS if condition---');
+                
+                List<HFCSMS__c> hfcSMS = new List<HFCSMS__c>();
+                List<String> contact =contactNo.split(';');
+                system.debug('in sendUserSMS Contact list---'+contact);
+                for(String cnt :contact){
+                    if(clist.size()>0)
+                    {
+                        if(clist[0].origin!='WhatsApp'){
+                        hfcSMS.add(new HFCSMS__c(MobileNo__c = cnt,MessageBody__c=smsBody,Case__c=caseId,LoanApp__c=loanId,Account__c=accountId,SMSSendStatus__c='Not Send'));
+                        }
+                        else if(clist[0].origin=='WhatsApp'){
+                            hfcSMS.add(new HFCSMS__c(MobileNo__c = cnt,MessageBody__c=smsBody,Case__c=caseId,LoanApp__c=loanId,Account__c=accountId,SMSSendStatus__c='Not Send',MessageType__c='WhatsApp'));
+                        }
+                    }
+                    else
+                    {
+                        hfcSMS.add(new HFCSMS__c(MobileNo__c = cnt,MessageBody__c=smsBody,Case__c=caseId,LoanApp__c=loanId,Account__c=accountId,SMSSendStatus__c='Not Send'));
+                    }
+                    
+                }
+                System.debug('hfcSMS record---'+hfcSMS);
+                if(hfcSMS!=null && hfcSMS.size() > 0 && Schema.getGlobalDescribe().get('HFCSMS__c').getDescribe().isCreateable () ){
+                    system.debug('in insert record--');
+                    Database.insert(hfcSMS);
+                }
+            }
+        }catch(Exception e){
+            System.debug('Error'+e);
+        }
+    }
+    
+}
+//======================================
+public class CRM_SendMessage {
+    
+    /* @AuraEnabled
+    public static Boolean sendSMS(String caseId,String msgToSend)
+    {
+        try
+        {
+            if(CAS_Util.validateString(caseId))
+            {
+                Map<String, String> condMap = new Map<String, String>();
+                condMap.put('Id', caseId);
+                List<Case> lcrList = (List<Case>)CAS_DBUtil.getRecords('Case', new Set<String>{'AccountId','Contact.MobilePhone','ContactId','Loan_No__c'}, condMap, '');
+                
+                if(lcrList != null && lcrList.size() > 0)
+                {
+                    
+                        
+                        //(System.now() >= expirationTime || resendOTP) && 
+                        if(lcrList[0].Contact.MobilePhone !=null)
+                        {
+                            String msgBody=getSMSTemplate();
+                            System.debug('msgBody-->'+msgBody);
+                            //String msgBody=msgToSend+'123';
+                            sendCustomerOTPSMS(lcrList[0].Contact.MobilePhone,lcrList[0].ContactId,msgBody+msgToSend,lcrList[0].Loan_No__c); 			
+                            return true;
+                        }
+                    //}
+                }   
+            }
+        }
+        catch(Exception e)
+        {
+            System.debug('exception in sendSMS'+e);
+        }
+        return false;
+    }
+    
+    public static String getSMSTemplate()
+    {
+        try
+        {
+            Map<String, String> condsMap = new Map<String, String>();
+            condsMap.put('Name', 'Send_OTP_SMS_Template');
+            
+            List<EmailTemplate> emailTemps = (List<EmailTemplate>)CAS_DBUtil.getRecords('EmailTemplate', new Set<String>{'Name','Body'}, condsMap, '');
+            if(emailTemps != null && emailTemps.size() > 0)
+            {
+                return emailTemps[0].Body;
+            }
+        }
+        catch(Exception e)
+        {
+            System.debug('getSMSTemplate-->'+e);
+        }
+        return null;
+    }
+    
+    public static void sendCustomerOTPSMS(String contactNo,String contactId,String msgToSend,String loanId) {
+        try{
+            
+            String generatedOTP;
+            if(msgToSend != null && contactId!=null && loanId!=null) 
+            {
+                //generatedOTP = generateOTP(); 
+                
+               // msgToSend = msgToSend.replace('{OTP}', generatedOTP);
+                String msg = EncodingUtil.urlEncode(msgToSend, 'UTF-8');
+
+				Map<String, String> existingValueMap = new Map<String,String>{'enterpriseid' => 'hfinotp', 'subEnterpriseid' =>'hfinotp', 'pusheid' => 'hfinotp', 'pushepwd' => 'hfinotp8', 'sender' => 'HeroFI'}; 
+                    
+				existingValueMap.put('msisdn','91'+contactNo.replaceAll('[^0-9]', '')); 
+                existingValueMap.put('msgtext',msg);
+                
+                CAS_DynamicCalloutWrapper dynaObj = new CAS_DynamicCalloutWrapper(new map<String,String>(), existingValueMap, 'SendUserMessage');
+                System.debug('dynaObj-->'+dynaObj);
+                if (CAS_WebServiceLogin.dynamicCallout(dynaObj) != null) 
+                {
+                    //updateUserOtp(generatedOTP,contactId);   
+                    //updateOTPCount(contactId,loanId);
+                }
+            }
+        }catch(Exception e){
+            System.debug('Error sendCustomerOTPSMS-->'+e);
+        }
+    }
+
+    @AuraEnabled
+    public static Boolean sendCustomerSMS(String caseId,String msgToSend) {
+        try{
+            system.debug('caseId'+caseId+'message'+msgToSend);
+            Case caseObj=[SELECT Id,ContactId,Contact.MobilePhone,Loan_No__c FROM Case where Id =: caseId];
+            System.debug('Case obj'+caseObj+caseObj.Contact.MobilePhone);
+            //String generatedOTP;
+            if(msgToSend != null && caseObj.ContactId!=null && caseObj.Loan_No__c!=null) 
+            {
+               // generatedOTP = generateOTP(); 
+                String contactNo=caseObj.Contact.MobilePhone;
+               // msgToSend = msgToSend.replace('{OTP}', generatedOTP);
+                String msg = EncodingUtil.urlEncode(msgToSend, 'UTF-8');
+
+				Map<String, String> existingValueMap = new Map<String,String>{'enterpriseid' => 'hfinotp', 'subEnterpriseid' =>'hfinotp', 'pusheid' => 'hfinotp', 'pushepwd' => 'hfinotp8', 'sender' => 'HeroFI'}; 
+                    
+				existingValueMap.put('msisdn','91'+contactNo.replaceAll('[^0-9]', '')); 
+                existingValueMap.put('msgtext',msg);
+                
+                CAS_DynamicCalloutWrapper dynaObj = new CAS_DynamicCalloutWrapper(new map<String,String>(), existingValueMap, 'SendUserMessage');
+                System.debug('dynaObj-->'+dynaObj);
+                if (CAS_WebServiceLogin.dynamicCallout(dynaObj) != null) 
+                {
+                    //updateHFCSMS(msgToSend,caseObj);   
+                    //updateOTPCount(contactId,loanId);
+                    return true;
+                }
+            }
+        }catch(Exception e){
+            System.debug('Error sendCustomerOTPSMS-->'+e);
+        }
+        
+       return false;
+    }*/
+    
+  
+     /*public static void updateHFCSMS(String msgToSend,Case caseObj){
+        
+        try{
+            String contactId=caseObj.ContactId;
+            if(CAS_Util.validateString(contactId) != null && CAS_Util.validateString(msgToSend) != null)
+            {
+                Map<String, String> condMap = new Map<String, String>();
+                condMap.put('Id', contactId);
+                
+                HFCSMS__c hfcsmsObj=new HFCSMS__c();
+                //List<Contact> contactDetails = (List<Contact>) CAS_DBUtil.getRecords('Contact',new Set<String>{'OTPNumber__c','OTPGeneratedDateTime__c'}, condMap, '');
+                //List<Contact> contactDetails= [select Id,OTPNumber__c,OTPGeneratedDateTime__c from Contact where Id = :contactId limit 1];
+                //if(contactDetails!=null && contactDetails.size() > 0)
+                //{
+                    hfcsmsObj.MessageBody__c = msgToSend;
+                    hfcsmsObj.LoanApp__c = caseObj.Loan_No__c;
+                    hfcsmsObj.SMSSendStatus__c = 'Send';
+                    hfcsmsObj.MobileNo__c= caseObj.Contact.MobilePhone;
+                    Database.insert(hfcsmsObj);
+                //}
+            }
+        }catch(Exception e)
+        { 
+            System.debug('insert SMS update Error-->'+e);
+        }        
+    }*/
+    
+      @AuraEnabled
+ 	public static boolean sendUserMessage(String caseId,String msgToSend,String triggerPointName){
+       
+        try
+        {
+            if(String.isNotEmpty(caseId) && caseId!=null && String.isNotBlank(caseId))
+            {
+                system.debug('in sendUserMessage---');
+                Map<String, String> condMap = new Map<String, String>();
+                condMap.put('Id', caseId);
+				// List<Case> lcrList = null;
+                List<Case> lcrList = (List<Case>)CAS_DBUtil.getRecords('Case', new Set<String>{'AccountId','Id','CaseNumber','Call_back_no__c','Contact.Name','ContactId','Loan_No__c'}, condMap, '');
+                
+                if(lcrList != null && lcrList.size() > 0)
+                {
+                    CommunicationTriggerPoint__mdt triggerpoint=CRM_GenericCommunicationModuleHelper.getTriggerPoint(triggerPointName);
+                    Map<String,String> bodyParam = new Map<String,String>();
+                    bodyParam.put('{ContactName}',lcrList[0].Contact.Name); //Similar Add Required parameters located in triggerpoint.TemplateParameters__c
+					bodyParam.put('{CRM_MessageBody}',msgToSend);
+                    bodyParam.put('{CaseNumber}',lcrList[0].CaseNumber);
+                    //For SMS
+                    if(triggerpoint.SendSMS__c){
+                        //SMS will Send To Customer
+                        bodyParam.put('{SMSTemplateName}',triggerpoint.SMSTemplateName__c);
+                        CRM_GenericConfiguration__c objGenericConfig = CRM_GenericConfiguration__c.getValues('sendSMSInternally');
+						if (objGenericConfig != null && objGenericConfig.Value__c != null && objGenericConfig.Value__c != '') 
+                        	bodyParam.put('contactNo',objGenericConfig.Value__c);
+                    	else
+							bodyParam.put('contactNo',lcrList[0].Call_back_no__c); // Add only Customer Contact No
+                        bodyParam.put('loanId',lcrList[0].Loan_No__c);
+                        bodyParam.put('accountId',lcrList[0].AccountId);
+                        bodyParam.put('caseId',lcrList[0].Id);
+                    }
+                    System.debug('bodyParam'+bodyParam);
+                    CRM_GenericCommunicationModule.sendCommunication(bodyParam);
+                    
+                    
+                }
+                
+            }
+    
+        }
+        catch(Exception e)
+        {
+            System.debug('exception in sendSMS'+e);
+        }
+        return true;
+    }
+    @AuraEnabled
+    public static String getCase(String recordId){
+        //Map<String,Case> caseMap=new Map<String,Case>();
+        Case caseObj=[select Id,Query_Description__r.Name,Call_back_no__c from Case where Id=:recordId];
+        if(caseObj.Call_back_no__c !=null)
+        	return caseObj.Call_back_no__c;
+        else 
+            return null;
+    }
+    
+    @AuraEnabled
+    public static List<CRM_CustomSMSTemplates__mdt> getSMSTemplate(String recordId){
+     
+     /*   List<CRM_CustomSMSTemplates__mdt> templateList = [SELECT CRM_Key__c,CRM_Active__c,CRM_ReplaceLogic__c,CRM_SMSTemplate__c,Label FROM CRM_CustomSMSTemplates__mdt 
+                                                         WHERE CRM_Active__c=true];
+        return templateList;*/
+                   List<CRM_CustomSMSTemplates__mdt> templateList = [SELECT DeveloperName,CRM_Key__c,CRM_Active__c,CRM_ReplaceLogic__c,CRM_SMSTemplate__c,Label FROM CRM_CustomSMSTemplates__mdt 
+                                                         WHERE CRM_Active__c=true order by Label ASC];
+                Case caseObj=[select CRM_AppId__c from Case where Id=:recordId];
+ List<CRM_CustomSMSTemplates__mdt> templateListnew=new  List<CRM_CustomSMSTemplates__mdt>();
+        for(CRM_CustomSMSTemplates__mdt customSMS: templateList){
+            
+            if(customSMS.DeveloperName=='CRM_ApplicationIdTemplate'){
+                customSMS.CRM_SMSTemplate__c=customSMS.CRM_SMSTemplate__c.replace('{1}',caseObj.CRM_AppId__c);
+                
+                
+            }
+           templateListnew.add(customSMS);
+        }
+//        {1}
+        return templateListnew;
+        
+/*        List<CRM_CustomSMSTemplates__mdt> templateList = [SELECT CRM_Key__c,CRM_Active__c,CRM_ReplaceLogic__c,CRM_SMSTemplate__c,Label FROM CRM_CustomSMSTemplates__mdt 
+                                                         WHERE CRM_Active__c=true];
+        return templateList;
+  */  
+    }
+}
